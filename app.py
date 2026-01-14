@@ -11,16 +11,45 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-import matplotlib.pyplot as plt
-import seaborn as sns
+from sklearn.metrics import accuracy_score
+from fpdf import FPDF
 
 warnings.filterwarnings("ignore")
 
 DATASET_PATH = "Dataset/resume_dataset.csv"
 EVAL_FOLDER = "Model_Evaluation"
 
-# -------------------- TEXT EXTRACTION -------------------- #
+def export_as_pdf(name, contact, summary, skills, experience, education):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    pdf.set_font("Times", "B", 24)
+    pdf.cell(0, 10, name.upper(), ln=True, align="C")
+    pdf.set_font("Times", "", 10)
+    pdf.cell(0, 5, contact, ln=True, align="C")
+    pdf.ln(5)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(5)
+
+    sections = [
+        ("PROFESSIONAL SUMMARY", summary),
+        ("TECHNICAL EXPERTISE", skills),
+        ("PROFESSIONAL EXPERIENCE", experience),
+        ("EDUCATION", education)
+    ]
+
+    for title, content in sections:
+        pdf.set_font("Times", "B", 12)
+        pdf.set_fill_color(240, 240, 240)
+        pdf.cell(0, 8, title, ln=True, fill=True)
+        pdf.ln(2)
+        pdf.set_font("Times", "", 11)
+        pdf.multi_cell(0, 6, content)
+        pdf.ln(5)
+        
+    return pdf.output(dest="S").encode("latin-1")
+
 def extract_text(file):
     extension = file.name.split(".")[-1].lower()
     if extension == "pdf":
@@ -44,139 +73,155 @@ def clean_text(text):
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
-# -------------------- MODEL TRAINING -------------------- #
+def get_chatbot_recommendations(text, role):
+    recommendations = []
+    if not re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text):
+        recommendations.append("Contact Information: Missing or unreadable email address.")
+    
+    word_count = len(text.split())
+    if word_count < 200:
+        recommendations.append("Resume Length: Content is brief. Consider adding more detail.")
+    
+    skill_suggestions = {
+        "Data Science": ["Python", "Machine Learning", "Pandas", "SQL", "Statistics"],
+        "Java Developer": ["Spring Boot", "Hibernate", "Microservices", "Java"],
+        "Web Designing": ["HTML5", "CSS3", "JavaScript", "React"],
+        "HR": ["Recruitment", "Employee Engagement", "Payroll"],
+        "Testing": ["Selenium", "Automation", "Junit"]
+    }
+    
+    suggested_skills = skill_suggestions.get(role, ["Certifications", "Soft Skills"])
+    missing = [skill for skill in suggested_skills if skill.lower() not in text.lower()]
+    if missing:
+        recommendations.append(f"Skill Gap: For {role}, consider adding: {', '.join(missing)}.")
+    
+    return recommendations
+
 @st.cache_resource
 def train_model():
+    if not os.path.exists(DATASET_PATH): return None, None, None
     data = pd.read_csv(DATASET_PATH)
     data["cleaned"] = data["Resume"].apply(clean_text)
-
+    
     encoder = LabelEncoder()
     y = encoder.fit_transform(data["Category"])
-
+    
     X_train, X_test, y_train, y_test = train_test_split(
         data["cleaned"], y, test_size=0.2, random_state=42, stratify=y
     )
-
+    
     vectorizer = TfidfVectorizer(stop_words="english", max_features=15000, ngram_range=(1,2))
     X_train_vec = vectorizer.fit_transform(X_train)
     X_test_vec = vectorizer.transform(X_test)
-
-    # Logistic Regression + Calibrated probabilities
-    base_model = LogisticRegression(max_iter=1000, class_weight="balanced")
-    model = CalibratedClassifierCV(base_model, method="sigmoid", cv=5)
+    
+    model = CalibratedClassifierCV(LogisticRegression(max_iter=1000, class_weight="balanced"), cv=5)
     model.fit(X_train_vec, y_train)
-
-    # ---------------- SAVE MODEL EVALUATION ---------------- #
-    if not os.path.exists(EVAL_FOLDER):
-        os.makedirs(EVAL_FOLDER)
-
-    y_pred = model.predict(X_test_vec)
-    acc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred, target_names=encoder.classes_)
-    cm = confusion_matrix(y_test, y_pred)
-
-    with open(os.path.join(EVAL_FOLDER, "accuracy.txt"), "w") as f:
-        f.write(f"Test Accuracy: {acc*100:.2f}%\n")
-    with open(os.path.join(EVAL_FOLDER, "classification_report.txt"), "w") as f:
-        f.write(report)
-
-    plt.figure(figsize=(8,6))
-    sns.heatmap(cm, annot=True, fmt='d', xticklabels=encoder.classes_, yticklabels=encoder.classes_, cmap="Blues")
-    plt.ylabel("Actual")
-    plt.xlabel("Predicted")
-    plt.title("Confusion Matrix")
-    plt.tight_layout()
-    plt.savefig(os.path.join(EVAL_FOLDER, "confusion_matrix.png"))
-    plt.close()
-
+    
     return model, vectorizer, encoder
 
-# -------------------- UI STYLING -------------------- #
-def apply_custom_style():
-    st.markdown("""
-        <style>
-        .stApp {background-color: #0f1117;}
-        header, footer {visibility: hidden;}
-        h1, h2, h3, p, label {color: #e6e6e6; font-family: Inter, system-ui, sans-serif;}
-        .block-container {padding-top: 2rem;}
-        div[data-testid="metric-container"] {background-color: #1a1c23; border-radius: 12px; padding: 20px; border: 1px solid #2a2d3a;}
-        .stButton>button {background-color: #2563eb; color: white; border-radius: 10px; height: 48px; font-size: 16px; border: none;}
-        .stButton>button:hover {background-color: #1e40af;}
-        textarea, .stFileUploader {background-color: #1a1c23 !important; border-radius: 10px !important; color: white !important;}
-        </style>
-    """, unsafe_allow_html=True)
-
-# -------------------- MAIN APPLICATION -------------------- #
 def main():
     st.set_page_config(page_title="JobExpert Pro", layout="wide")
-    apply_custom_style()
-
-    st.title("JobExpert Pro")
-    st.write("AI-powered resume screening and job role classification using Logistic Regression.")
-
-    if not os.path.exists(DATASET_PATH):
-        st.error("Dataset not found. Please verify the dataset path.")
+    st.markdown("<style>.stApp {background-color: #0d1117; color: #e6e6e6;}</style>", unsafe_allow_html=True)
+    
+    model, vectorizer, encoder = train_model()
+    if not model:
+        st.error(f"Dataset not found at '{DATASET_PATH}'")
         return
 
-    model, vectorizer, encoder = train_model()
-    st.info(f"Model training complete. Evaluation saved in '{EVAL_FOLDER}' folder.")
+    st.sidebar.title("JobExpert Pro")
+    page = st.sidebar.radio("Services", ["Resume Scanner", "CV Maker"])
 
-    st.divider()
-    tab_upload, tab_paste = st.tabs(["Upload Resume", "Paste Resume Text"])
-    uploaded_text = ""
-    manual_text = ""
+    if page == "Resume Scanner":
+        st.title("JobExpert Pro: Scanner")
+        st.write("AI-powered resume screening and job role classification.")
+        
+        t1, t2 = st.tabs(["Upload Resume", "Paste Text"])
+        input_text = ""
+        with t1:
+            f = st.file_uploader("Upload PDF or DOCX", type=["pdf", "docx", "txt"])
+            if f: input_text = extract_text(f)
+        with t2:
+            p = st.text_area("Paste Content Here", height=250)
+            if p: input_text = p
 
-    with tab_upload:
-        file = st.file_uploader("Upload resume file", type=["pdf","docx","txt"])
-        if file:
-            uploaded_text = extract_text(file)
+        if st.button("Analyze Resume"):
+            if input_text:
+                cleaned = clean_text(input_text)
+                vec = vectorizer.transform([cleaned])
+                probs = model.predict_proba(vec)[0]
+                idx = np.argmax(probs)
+                role, conf = encoder.classes_[idx], probs[idx]*100
 
-    with tab_paste:
-        manual_text = st.text_area("Paste resume content", height=260)
-
-    resume_text = manual_text if manual_text.strip() else uploaded_text
-    st.divider()
-
-    if st.button("Analyze Resume"):
-        if not resume_text.strip():
-            st.warning("Please upload a resume file or paste resume text.")
-            return
-
-        cleaned = clean_text(resume_text)
-        vec = vectorizer.transform([cleaned])
-        probabilities = model.predict_proba(vec)[0]
-        sorted_indices = np.argsort(probabilities)[::-1]
-
-        # ---------------- TOP-N ROLES ---------------- #
-        results = []
-        for idx in sorted_indices:
-            score = probabilities[idx]*100
-            if len(results) == 0:
-                results.append((encoder.classes_[idx], score))
-            elif score >= 35 and len(results) < 3:
-                results.append((encoder.classes_[idx], score))
+                col_res, col_bot = st.columns(2)
+                with col_res:
+                    st.subheader("Screening Result")
+                    st.metric("Role", role)
+                    #st.metric("Confidence", f"{conf:.2f}%")
+                    #st.progress(conf/100)
+                
+                with col_bot:
+                    st.subheader("AI Advisor Feedback")
+                    recs = get_chatbot_recommendations(input_text, role)
+                    for r in recs: st.write(f"- {r}")
             else:
-                break
+                st.warning("Please provide resume text.")
 
-        primary_role, primary_conf = results[0]
-        primary_conf = min(primary_conf, 99.0)  # cap display only
+    else:
+        st.title("CV Maker")
+        st.write("Build a ATS-optimized executive resume.")
+        
+        col_in, col_pre = st.columns([1, 1.2], gap="large")
+        
+        with col_in:
+            with st.form("builder_form"):
+                st.subheader("Personal Details")
+                name = st.text_input("Full Name", "Husnain Rehman")
+                contact = st.text_input("Contact Details", "Lahore, Pakistan | husnainrehman26@gmail.com")
+                target_role = st.selectbox("Target Job Category", encoder.classes_)
+                summary = st.text_area("Professional Summary", height=100)
+                skills = st.text_area("Technical Expertise", height=80)
+                experience = st.text_area("Professional Experience", height=150)
+                education = st.text_area("Education", height=80)
+                submit = st.form_submit_button("Generate Professional CV")
 
-        # ---------------- DISPLAY METRICS ---------------- #
-        st.subheader("Screening Result")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Inferred Job Role", primary_role)
-        with col2:
-            st.metric("Confidence Score", f"{primary_conf:.2f}%")
-            st.progress(primary_conf/100)
+        with col_pre:
+            if submit:
+                content = f"{target_role} {summary} {skills} {experience}"
+                vec = vectorizer.transform([clean_text(content)])
+                score = model.predict_proba(vec)[0][list(encoder.classes_).index(target_role)] * 100
+                
+                if score >= 90:
+                    st.success(f"ATS Score: {score:.1f}% - Optimized!")
+                else:
+                    st.warning(f"ATS Optimization Score: {score:.1f}%. Add keywords related to {target_role} to reach 90%.")
 
-        if len(results) > 1:
-            st.subheader("Other Relevant Roles")
-            for role, score in results[1:]:
-                st.write(f"{role}: {score:.2f}%")
-
-        if primary_conf < 70:
-            st.info("Low confidence prediction. Manual review recommended.")
+                cv_template = f"""
+                <div style="background-color: white; color: #1b1f23; padding: 40px; font-family: 'Times New Roman', serif; border-radius: 4px; line-height: 1.5; border: 1px solid #ddd;">
+                    <div style="text-align: center; border-bottom: 2px solid #222; margin-bottom: 15px; padding-bottom: 10px;">
+                        <h1 style="margin: 0; font-size: 26px; color: #000; text-transform: uppercase;">{name}</h1>
+                        <p style="margin: 5px 0; font-size: 13px; color: #444;">{contact}</p>
+                    </div>
+                    <h3 style="font-size: 16px; border-bottom: 1px solid #333; text-transform: uppercase; margin-top: 20px;">Professional Summary</h3>
+                    <p style="font-size: 14px; white-space: pre-line;">{summary}</p>
+                    <h3 style="font-size: 16px; border-bottom: 1px solid #333; text-transform: uppercase; margin-top: 20px;">Technical Expertise</h3>
+                    <p style="font-size: 14px; white-space: pre-line;">{skills}</p>
+                    <h3 style="font-size: 16px; border-bottom: 1px solid #333; text-transform: uppercase; margin-top: 20px;">Experience</h3>
+                    <p style="font-size: 14px; white-space: pre-line;">{experience}</p>
+                    <h3 style="font-size: 16px; border-bottom: 1px solid #333; text-transform: uppercase; margin-top: 20px;">Education</h3>
+                    <p style="font-size: 14px; white-space: pre-line;">{education}</p>
+                </div>
+                """
+                st.markdown(cv_template, unsafe_allow_html=True)
+                
+                pdf_data = export_as_pdf(name, contact, summary, skills, experience, education)
+                st.download_button(
+                    label="Download CV as PDF",
+                    data=pdf_data,
+                    file_name=f"{name.replace(' ', '_')}_CV.pdf",
+                    mime="application/pdf"
+                )
+            else:
+                st.info("Fill the form and click generate to preview and download your CV.")
 
 if __name__ == "__main__":
     main()
