@@ -168,7 +168,7 @@ def main():
 
     else:
         st.title("CV Maker")
-        st.write("Build a ATS-optimized executive resume.")
+        st.write("Build a optimized resume.")
         
         col_in, col_pre = st.columns([1, 1.2], gap="large")
         
@@ -191,9 +191,9 @@ def main():
                 score = model.predict_proba(vec)[0][list(encoder.classes_).index(target_role)] * 100
                 
                 if score >= 90:
-                    st.success(f"ATS Score: {score:.1f}% - Optimized!")
+                    st.success(f"CV GENERATED")
                 else:
-                    st.warning(f"ATS Optimization Score: {score:.1f}%. Add keywords related to {target_role} to reach 90%.")
+                    st.warning(f"Add keywords related to {target_role} to reach 90%.")
 
                 cv_template = f"""
                 <div style="background-color: white; color: #1b1f23; padding: 40px; font-family: 'Times New Roman', serif; border-radius: 4px; line-height: 1.5; border: 1px solid #ddd;">
