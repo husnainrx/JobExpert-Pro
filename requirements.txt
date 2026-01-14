@@ -6,3 +6,4 @@ matplotlib
 seaborn
 PyPDF2
 python-docx
+fpdf
